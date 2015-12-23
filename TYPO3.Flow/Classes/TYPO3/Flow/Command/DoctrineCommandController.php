@@ -16,6 +16,7 @@ use Doctrine\Common\Util\Debug;
 use TYPO3\Flow\Annotations as Flow;
 use TYPO3\Flow\Cli\CommandController;
 use TYPO3\Flow\Error\Debugger;
+use TYPO3\Flow\Exception;
 use TYPO3\Flow\Package\PackageManagerInterface;
 use TYPO3\Flow\Package;
 use TYPO3\Flow\Persistence\Doctrine\Service as DoctrineService;
@@ -375,13 +376,14 @@ class DoctrineCommandController extends CommandController
      * Otherwise an empty migration skeleton is generated.
      *
      * @param boolean $diffAgainstCurrent Whether to base the migration on the current schema structure
+     * @param string $packageKey If given the migration will be copied to the package directory (Migrations/Mysql)
      * @return void
      * @see typo3.flow:doctrine:migrate
      * @see typo3.flow:doctrine:migrationstatus
      * @see typo3.flow:doctrine:migrationexecute
      * @see typo3.flow:doctrine:migrationversion
      */
-    public function migrationGenerateCommand($diffAgainstCurrent = true)
+    public function migrationGenerateCommand($diffAgainstCurrent = true, $packageKey = "")
     {
         // "driver" is used only for Doctrine, thus we (mis-)use it here
         // additionally, when no path is set, skip this step, assuming no DB is needed
@@ -392,8 +394,45 @@ class DoctrineCommandController extends CommandController
 
         $migrationClassPathAndFilename = $this->doctrineService->generateMigration($diffAgainstCurrent);
 
+        $package = null;
+        if($packageKey !== "") {
+            try {
+                $package = $this->packageManager->getPackage($packageKey);
+            } catch(Exception $e) {
+                $this->outputLine($e->getMessage());
+                $this->quit(1);
+            }
+        } else {
+            $package = $this->getPackageByIndex();
+        }
+
+        $this->outputLine('<info>Generated new migration class!</info>');
+        $this->outputLine('');
+        if ($package !== null) {
+            /** @var Package $package */
+            $targetPathAndFilename = Files::concatenatePaths(array($package->getPackagePath(), 'Migrations', $this->doctrineService->getDatabasePlatformName(), basename($migrationClassPathAndFilename)));
+            Files::createDirectoryRecursively(dirname($targetPathAndFilename));
+            rename($migrationClassPathAndFilename, $targetPathAndFilename);
+            $this->outputLine('The migration was moved to %s.', array(substr($targetPathAndFilename, strlen(FLOW_PATH_PACKAGES))));
+            $this->outputLine('Next Steps:');
+        } else {
+            $this->outputLine('Next Steps:');
+            $this->outputLine(sprintf('- Move <comment>%s</comment> to YourPackage/<comment>Migrations/%s/</comment>', $migrationClassPathAndFilename, $this->doctrineService->getDatabasePlatformName()));
+        }
+        $this->outputLine('- Review and adjust the generated migration.');
+        $this->outputLine('- (optional) execute the migration using <comment>%s doctrine:migrate</comment>', array($this->getFlowInvocationString()));
+    }
+
+    /**
+     * Shows a Console Choice List with available packages. Returns selected Package (or null if no package was selected by user)
+     *
+     * @return null|Package\PackageInterface
+     */
+    protected function getPackageByIndex() {
+
         $choices = array('Don\'t Move');
         $packages = array(null);
+        $package =  null;
 
         /** @var Package $package */
         foreach ($this->packageManager->getAvailablePackages() as $package) {
@@ -406,21 +445,10 @@ class DoctrineCommandController extends CommandController
         }
         $selectedPackageIndex = (integer)$this->output->select('Do you want to move the migration to one of these Packages?', $choices, 0);
 
-        $this->outputLine('<info>Generated new migration class!</info>');
-        $this->outputLine('');
-        if ($selectedPackageIndex !== 0) {
-            /** @var Package $selectedPackage */
-            $selectedPackage = $packages[$selectedPackageIndex];
-            $targetPathAndFilename = Files::concatenatePaths(array($selectedPackage->getPackagePath(), 'Migrations', $this->doctrineService->getDatabasePlatformName(), basename($migrationClassPathAndFilename)));
-            Files::createDirectoryRecursively(dirname($targetPathAndFilename));
-            rename($migrationClassPathAndFilename, $targetPathAndFilename);
-            $this->outputLine('The migration was moved to %s.', array(substr($targetPathAndFilename, strlen(FLOW_PATH_PACKAGES))));
-            $this->outputLine('Next Steps:');
-        } else {
-            $this->outputLine('Next Steps:');
-            $this->outputLine(sprintf('- Move <comment>%s</comment> to YourPackage/<comment>Migrations/%s/</comment>', $migrationClassPathAndFilename, $this->doctrineService->getDatabasePlatformName()));
+        if($selectedPackageIndex > 0) {
+            $package = $packages[$selectedPackageIndex];
         }
-        $this->outputLine('- Review and adjust the generated migration.');
-        $this->outputLine('- (optional) execute the migration using <comment>%s doctrine:migrate</comment>', array($this->getFlowInvocationString()));
+
+        return $package;
     }
 }
